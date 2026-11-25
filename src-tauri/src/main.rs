@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
-mod lcu;
 mod riot;
 
 use db::Snap;
@@ -10,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -39,16 +38,13 @@ impl Default for Settings {
 #[derive(Default)]
 pub struct Cache {
     champs: Option<Value>,
-    skins: Option<Arc<Value>>,
 }
 
 pub struct AppState {
     pub http: reqwest::Client,
-    pub lcu_http: reqwest::Client,
     pub db: Mutex<rusqlite::Connection>,
     pub limiter: tokio::sync::Mutex<VecDeque<Instant>>,
     pub settings: Mutex<Settings>,
-    pub lcu: Mutex<Option<lcu::Creds>>,
     pub cache: tokio::sync::Mutex<Cache>,
     pub dir: PathBuf,
     pub meta_running: std::sync::atomic::AtomicBool,
@@ -75,7 +71,6 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> R<()> {
     let txt = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(state.dir.join("settings.json"), txt).map_err(|e| e.to_string())?;
     *state.settings.lock().unwrap() = settings;
-    *state.lcu.lock().unwrap() = None;
     Ok(())
 }
 
@@ -767,31 +762,6 @@ async fn fetch_json(st: &AppState, url: &str) -> R<Value> {
         .map_err(|e| e.to_string())
 }
 
-/// Lit un fichier en cache disque s'il a moins de `max_age`, sinon le retélécharge.
-async fn disk_cached(st: &AppState, file: &str, max_age: Duration, url: impl std::future::Future<Output = R<String>>) -> R<Value> {
-    let path = st.dir.join(file);
-    let fresh = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .map(|t| t.elapsed().unwrap_or_default() < max_age)
-        .unwrap_or(false);
-    if fresh {
-        if let Some(v) = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
-            return Ok(v);
-        }
-    }
-    let fetched = async { fetch_json(st, &url.await?).await }.await;
-    match fetched {
-        Ok(v) => {
-            let _ = std::fs::write(&path, v.to_string());
-            Ok(v)
-        }
-        Err(e) => std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .ok_or(e),
-    }
-}
-
 fn cdragon_icon(path: &str) -> String {
     tile_url(path)
 }
@@ -910,150 +880,10 @@ async fn static_data(state: State<'_, AppState>) -> R<Value> {
     Ok(v)
 }
 
-// ---------------------------------------------------------------- Client LoL & skins
-
-fn platform_from_region(region: &str) -> &'static str {
-    match region.to_uppercase().as_str() {
-        "EUW" => "euw1",
-        "EUNE" => "eun1",
-        "NA" => "na1",
-        "KR" => "kr",
-        "JP" => "jp1",
-        "BR" => "br1",
-        "LAN" => "la1",
-        "LAS" => "la2",
-        "OCE" => "oc1",
-        "TR" => "tr1",
-        "RU" => "ru",
-        "ME" => "me1",
-        "PH" => "ph2",
-        "SG" => "sg2",
-        "TH" => "th2",
-        "TW" => "tw2",
-        "VN" => "vn2",
-        _ => "euw1",
-    }
-}
-
-#[tauri::command]
-async fn lcu_account(state: State<'_, AppState>) -> R<Value> {
-    let me = lcu::get(&state, "/lol-summoner/v1/current-summoner").await?;
-    let region = lcu::get(&state, "/riotclient/region-locale").await.unwrap_or_default();
-    Ok(json!({
-        "gameName": me["gameName"],
-        "tagLine": me["tagLine"],
-        "platform": platform_from_region(region["region"].as_str().unwrap_or("EUW")),
-    }))
-}
-
-fn estimate_rp(rarity: &str) -> i64 {
-    match rarity {
-        "kEpic" => 1350,
-        "kLegendary" => 1820,
-        "kMythic" => 2000,
-        "kUltimate" | "kTranscendent" | "kExalted" => 3250,
-        _ => 975,
-    }
-}
-
+/// Chemin d'asset du client (« /lol-game-data/assets/… ») -> URL CommunityDragon.
 fn tile_url(path: &str) -> String {
     let rest = path.trim_start_matches("/lol-game-data/assets/").to_lowercase();
     format!("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/{rest}")
-}
-
-#[derive(Serialize)]
-struct SkinOut {
-    id: i64,
-    name: String,
-    champ_id: i64,
-    rarity: String,
-    legacy: bool,
-    rp: i64,
-    estimated: bool,
-    tile: String,
-}
-
-#[tauri::command]
-async fn skin_collection(state: State<'_, AppState>) -> R<Value> {
-    let st = &*state;
-    let me = lcu::get(st, "/lol-summoner/v1/current-summoner").await?;
-    let sid = me["summonerId"].as_i64().ok_or("Aucun invocateur connecté dans le client.")?;
-    let owned = lcu::get(st, &format!("/lol-champions/v1/inventories/{sid}/skins-minimal")).await?;
-
-    // Prix réels de la boutique quand le skin y est encore vendu.
-    let mut prices: HashMap<i64, i64> = HashMap::new();
-    if let Ok(cat) = lcu::get(st, "/lol-catalog/v1/items/CHAMPION_SKIN").await {
-        for it in cat.as_array().map(|a| a.as_slice()).unwrap_or_default() {
-            let id = it["itemId"].as_i64();
-            let rp = it["prices"]
-                .as_array()
-                .and_then(|ps| ps.iter().find(|p| p["currency"] == "RP"))
-                .and_then(|p| p["cost"].as_i64());
-            if let (Some(id), Some(rp)) = (id, rp) {
-                if rp > 0 {
-                    prices.insert(id, rp);
-                }
-            }
-        }
-    }
-
-    // Rareté, statut « legacy » et images depuis CommunityDragon (mis en cache 3 jours).
-    let cd = {
-        let mut cache = st.cache.lock().await;
-        match &cache.skins {
-            Some(v) => v.clone(),
-            None => {
-                let v = Arc::new(
-                    disk_cached(st, "cdragon_skins.json", Duration::from_secs(3 * 86400), async {
-                        Ok("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/fr_fr/v1/skins.json".to_string())
-                    })
-                    .await?,
-                );
-                cache.skins = Some(v.clone());
-                v
-            }
-        }
-    };
-
-    let mut skins: Vec<SkinOut> = Vec::new();
-    for s in owned.as_array().map(|a| a.as_slice()).unwrap_or_default() {
-        if s["isBase"].as_bool() == Some(true) || s["ownership"]["owned"].as_bool() != Some(true) {
-            continue;
-        }
-        let id = s["id"].as_i64().unwrap_or(0);
-        let info = &cd[id.to_string()];
-        let rarity = info["rarity"].as_str().unwrap_or("kNoRarity").to_string();
-        let (rp, estimated) = match prices.get(&id) {
-            Some(p) => (*p, false),
-            None => (estimate_rp(&rarity), true),
-        };
-        skins.push(SkinOut {
-            id,
-            name: s["name"].as_str().or(info["name"].as_str()).unwrap_or("?").to_string(),
-            champ_id: s["championId"].as_i64().unwrap_or(id / 1000),
-            legacy: info["isLegacy"].as_bool().unwrap_or(false),
-            tile: info["tilePath"].as_str().map(tile_url).unwrap_or_default(),
-            rarity,
-            rp,
-            estimated,
-        });
-    }
-    skins.sort_by(|a, b| b.rp.cmp(&a.rp).then(a.name.cmp(&b.name)));
-    let total_available = cd
-        .as_object()
-        .map(|o| o.values().filter(|v| v["isBase"].as_bool() == Some(false)).count())
-        .unwrap_or(0);
-    let total_rp: i64 = skins.iter().map(|s| s.rp).sum();
-    let rate = st.settings.lock().unwrap().rp_to_eur;
-    Ok(json!({
-        "summoner": format!("{}#{}", me["gameName"].as_str().unwrap_or(""), me["tagLine"].as_str().unwrap_or("")),
-        "owned": skins.len(),
-        "available": total_available,
-        "rp": total_rp,
-        "eur": (total_rp as f64 * rate * 100.0).round() / 100.0,
-        "rate": rate,
-        "skins": skins,
-    }))
 }
 
 // ---------------------------------------------------------------- Démarrage
@@ -1089,18 +919,11 @@ fn main() {
                 .timeout(Duration::from_secs(20))
                 .user_agent("ShiganshinaGG/1.0")
                 .build()?;
-            // Le client LoL utilise un certificat auto-signé, uniquement sur 127.0.0.1.
-            let lcu_http = reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)
-                .timeout(Duration::from_secs(10))
-                .build()?;
             app.manage(AppState {
                 http,
-                lcu_http,
                 db: Mutex::new(conn),
                 limiter: tokio::sync::Mutex::new(VecDeque::new()),
                 settings: Mutex::new(settings),
-                lcu: Mutex::new(None),
                 cache: tokio::sync::Mutex::new(Cache::default()),
                 dir,
                 meta_running: Default::default(),
@@ -1120,8 +943,6 @@ fn main() {
             cached_matches,
             champion_stats,
             static_data,
-            lcu_account,
-            skin_collection,
             masteries,
             live_game,
             recent_ids,

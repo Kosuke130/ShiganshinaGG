@@ -9,7 +9,6 @@ Application Windows légère pour suivre ton compte League of Legends, façon op
 - **Maîtrises** : score, points, niveaux et progression de chaque champion, filtres par classe
 - **Partie en cours** : les 10 joueurs avec leur rang, LP, winrate et rang moyen de chaque équipe (détection automatique pour ton compte)
 - **Évolution des LP** : courbe, pic, plus bas, variation 24 h / 7 jours, gain moyen par victoire/défaite
-- **Collection de skins** : valeur en RP et en €, rareté, legacy
 - **Builds & tier list** (onglets Build, Runes, Objets, Compétences, Matchups, Statistiques : stats par rune et par fragment, objets par slot avec timings, écarts d'or/XP/CS à 15 min par matchup, meilleurs alliés, winrate selon la durée, comparaison avec la moyenne du rôle) : runes complètes, sorts, objets de départ, bottes, build principal dans l'ordre d'achat, objets suivants, ordre des compétences et matchups de chaque champion, calculés à partir de vraies parties Master / Grand Maître / Challenger de ta région (import en arrière-plan, ≈ 20 min pour 300 parties avec une clé de développement). Tier list avec winrate, pick et ban.
 - **Coach** : après chaque partie, compare tes stats (CS à 10 min, CS/min, dégâts, or, vision, morts, participation) à celles des Master+ sur le même champion et le même rôle, avec une note sur 100 et 2-3 conseils concrets
 - **Comparer deux joueurs** : rangs, stats sur 20 parties, champions et historique commun (ensemble / l'un contre l'autre)
@@ -38,7 +37,7 @@ cargo tauri build
 ## Premier lancement
 
 1. Dans **Paramètres**, colle ta clé API Riot (https://developer.riotgames.com). Une clé de développement expire au bout de 24 h : régénère-la puis recolle-la.
-2. Entre ton Riot ID (`Nom#TAG`) et ta région, ou clique sur **Depuis le client** si League of Legends est ouvert.
+2. Entre ton Riot ID (`Nom#TAG`) et ta région.
 3. Dans **Analyse** ou **Champions**, clique sur « Importer 100 parties » pour remplir les statistiques.
 
 Si tu utilisais RiftPulse, tes paramètres, parties et historique de LP sont repris automatiquement au premier lancement.

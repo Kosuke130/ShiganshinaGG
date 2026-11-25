@@ -108,7 +108,6 @@ const S = {
   lpHist: null, lpQueue: 'RANKED_SOLO_5x5',
   mastery: null, masteryLoading: false, masteryQ: '', masteryClass: null, masterySort: 'points',
   live: undefined, liveLoading: false,
-  skins: null, skinsLoading: false, skinQuery: '', skinSort: 'rp', skinRarity: null,
   client: null,
   premades: {}, premadeLoading: null, premadeLeft: 0,
   coach: {}, cmp: { q: '', b: null, bm: null, loading: false },
@@ -434,7 +433,7 @@ function navGo(delta) {
 /* ================================================================ rendu */
 function render() {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === S.view));
-  const views = { compare: vCompare, builds: vBuilds, overview: vOverview, history: vHistory, analysis: vAnalysis, champions: vChampions, mastery: vMastery, live: vLive, lp: vLP, skins: vSkins, settings: vSettings };
+  const views = { compare: vCompare, builds: vBuilds, overview: vOverview, history: vHistory, analysis: vAnalysis, champions: vChampions, mastery: vMastery, live: vLive, lp: vLP, settings: vSettings };
   emblemSeq = 0;
   $('#view').innerHTML = views[S.view]() + (S.champDetail != null ? champDrawer() : '');
   if (S.view === 'settings') bindSettings();
@@ -1156,75 +1155,6 @@ function vLP() {
       <span class="muted" style="width:140px">${c.g > 0 ? `${c.w}V ${c.g - c.w}D` : ''}</span>${deltaHtml(c.d)}</div>`).join('')}</div>` : ''}</div>`;
 }
 
-/* ---------------------------------------------------------------- Skins */
-function skinGrid() {
-  const q = S.skinQuery.trim().toLowerCase();
-  let list = S.skins.skins.filter((s) => (!S.skinRarity || s.rarity === S.skinRarity) && (!q || s.name.toLowerCase().includes(q) || champName(s.champ_id).toLowerCase().includes(q)));
-  const sorts = {
-    rp: (a, b) => b.rp - a.rp,
-    name: (a, b) => a.name.localeCompare(b.name),
-    champ: (a, b) => champName(a.champ_id).localeCompare(champName(b.champ_id)) || b.rp - a.rp,
-  };
-  list = list.sort(sorts[S.skinSort]);
-  if (!list.length) return '<p class="muted">Aucun skin ne correspond.</p>';
-  return list.map((s) => {
-    const [rn, rc] = rarity(s.rarity);
-    return `<div class="skin" data-tip="${esc(s.name)}">
-      ${s.tile ? `<img loading="lazy" src="${esc(s.tile)}" alt="">` : ''}
-      ${s.rarity !== 'kNoRarity' ? `<span class="rar" style="color:${rc}">${rn}</span>` : ''}
-      ${s.legacy ? '<span class="leg">Legacy</span>' : ''}
-      <div class="info"><div class="nm">${esc(s.name)}</div><div class="pr">${fmt(s.rp)} RP${s.estimated ? ' <span class="dim">≈</span>' : ''}</div></div>
-    </div>`;
-  }).join('');
-}
-
-function vSkins() {
-  const head = `<div class="page-title"><div><h1>Collection de skins</h1><p>Lue directement depuis ton client League of Legends</p></div>${S.skins ? `<button class="btn" data-act="skins">${ICONS.refresh}Actualiser</button>` : ''}</div>`;
-  if (S.skinsLoading) return head + loader('Lecture de ta collection dans le client…');
-  if (!S.skins) {
-    return head + `<div class="card">${empty('star', 'Combien vaut ta collection ?', 'Lance le client League of Legends et connecte-toi, puis clique sur Analyser. ShiganshinaGG lit tes skins possédés et calcule leur valeur.', '<button class="btn gold" data-act="skins">Analyser ma collection</button>')}</div>`;
-  }
-  const k = S.skins;
-  const by = {};
-  for (const s of k.skins) { const r = (by[s.rarity] ??= { n: 0, rp: 0 }); r.n++; r.rp += s.rp; }
-  const maxN = Math.max(...Object.values(by).map((r) => r.n), 1);
-  const order = ['kExalted', 'kTranscendent', 'kUltimate', 'kMythic', 'kLegendary', 'kEpic', 'kNoRarity'];
-  const champCount = {};
-  for (const s of k.skins) champCount[s.champ_id] = (champCount[s.champ_id] || 0) + 1;
-  const topChamps = Object.entries(champCount).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  const legacy = k.skins.filter((s) => s.legacy).length;
-  const estimated = k.skins.filter((s) => s.estimated).length;
-  const rarityChips = [[null, 'Toutes']].concat(order.filter((r) => by[r]).map((r) => [r, rarity(r)[0]]))
-    .map(([r, l]) => `<button class="chip${S.skinRarity === r ? ' on' : ''}" data-sr="${r ?? ''}">${l}</button>`).join('');
-
-  return `<div class="fade-in">${head}
-    <div class="value-hero mb">
-      <div class="card stat main"><div class="label">Valeur estimée</div><div class="value">${k.eur.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}</div><div class="sub">${esc(k.summoner)}</div></div>
-      <div class="card stat"><div class="label">Riot Points</div><div class="value">${fmt(k.rp)}</div><div class="sub">≈ ${fmt(k.rp / Math.max(1, k.owned))} RP par skin</div></div>
-      <div class="card stat"><div class="label">Skins possédés</div><div class="value">${k.owned}</div><div class="sub">${pct(k.owned, k.available)}% des ${fmt(k.available)} skins du jeu</div></div>
-      <div class="card stat"><div class="label">Legacy</div><div class="value">${legacy}</div><div class="sub">skins plus en vente</div></div>
-    </div>
-    <div class="grid g2 mb">
-      <div class="card"><h3>Par rareté</h3>${order.filter((r) => by[r]).map((r) => {
-        const [rn, rc] = rarity(r);
-        return `<div class="rarity-row"><b style="color:${rc}">${rn}</b><div class="progress"><i style="width:${(by[r].n * 100) / maxN}%;background:${rc}"></i></div><span>${by[r].n}</span><span class="muted right">${fmt(by[r].rp)} RP</span></div>`;
-      }).join('')}</div>
-      <div class="card"><h3>Champions les plus habillés</h3><div class="grid g2" style="gap:6px 16px">${topChamps.map(([id, n]) => `
-        <div class="champ-mini"><img class="cicon" loading="lazy" src="${champImg(+id)}" alt=""><div class="grow"><b>${esc(champName(+id))}</b><div class="muted" style="font-size:12.5px">${n} skin${n > 1 ? 's' : ''}</div></div></div>`).join('')}</div></div>
-    </div>
-    <div class="toolbar mb">
-      <input class="input" id="skinQ" placeholder="Filtrer par skin ou champion…" value="${esc(S.skinQuery)}" style="width:260px">
-      <select class="input" id="skinSort" style="width:180px">
-        <option value="rp"${S.skinSort === 'rp' ? ' selected' : ''}>Trier : valeur</option>
-        <option value="name"${S.skinSort === 'name' ? ' selected' : ''}>Trier : nom</option>
-        <option value="champ"${S.skinSort === 'champ' ? ' selected' : ''}>Trier : champion</option>
-      </select>
-      <div class="chips">${rarityChips}</div>
-    </div>
-    <div class="skin-grid" id="skinGrid">${skinGrid()}</div>
-    <p class="dim mt" style="font-size:12px">Prix boutique quand le skin est en vente, sinon estimation selon la rareté (${estimated} skins estimés, marqués ≈). Conversion : ${(k.rate * 1000).toFixed(2).replace('.', ',')} € pour 1 000 RP, modifiable dans les paramètres.</p></div>`;
-}
-
 /* ---------------------------------------------------------------- Paramètres */
 function vSettings() {
   const s = S.settings || {};
@@ -1236,15 +1166,8 @@ function vSettings() {
       <div class="hint">Crée-la sur <b>developer.riotgames.com</b> (connexion avec ton compte Riot). Une clé de développement expire après 24 h : il suffit de la régénérer et de la recoller ici.</div></div>
     <div class="field"><label>Mon compte (Riot ID)</label>
       <div class="row"><input class="input" id="sMain" value="${esc(s.main_riot_id)}" placeholder="Nom#TAG" spellcheck="false">
-      <select class="input" id="sPlat" style="flex:0 0 110px">${REGIONS.map(([v, l]) => `<option value="${v}"${v === s.platform ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <button class="btn" id="sFromClient" type="button">Depuis le client</button></div>
+      <select class="input" id="sPlat" style="flex:0 0 110px">${REGIONS.map(([v, l]) => `<option value="${v}"${v === s.platform ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="hint">Affiché au démarrage. Ses LP sont suivis automatiquement et ShiganshinaGG détecte quand il est en partie.</div></div>
-    <div class="field"><label>Dossier de League of Legends <span class="dim">(facultatif)</span></label>
-      <input class="input" id="sPath" value="${esc(s.league_path)}" placeholder="C:\\Riot Games\\League of Legends" spellcheck="false">
-      <div class="hint">À remplir seulement si le jeu n'est pas installé à l'emplacement par défaut.</div></div>
-    <div class="field"><label>Valeur de 1 000 RP en euros</label>
-      <input class="input" id="sRate" type="number" step="0.01" min="0" value="${((s.rp_to_eur || 0.00725) * 1000).toFixed(2)}" style="width:140px">
-      <div class="hint">Par défaut 7,25 € (≈ 10 € pour 1 380 RP).</div></div>
     <div class="field"><label>Builds Master+</label>
       <label class="row" style="gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font:500 14px var(--ui);color:var(--text)"><input type="checkbox" id="sAutoMeta"${store.get('autoMeta', true) !== false ? ' checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)"> Mise à jour quotidienne : 150 nouvelles parties Master+ du patch en cours, une fois par jour</label>
       <div class="hint">Environ 5 minutes en arrière-plan, au premier lancement de la journée seulement. Les gros imports (Builds &amp; tier list → +2 000) reprennent tout seuls s'ils sont interrompus.</div></div>
@@ -1263,29 +1186,20 @@ function bindSettings() {
     i.type = i.type === 'password' ? 'text' : 'password';
     $('#sKeyShow').textContent = i.type === 'password' ? 'Afficher' : 'Masquer';
   };
-  $('#sFromClient').onclick = async () => {
-    try {
-      const a = await call('lcu_account');
-      $('#sMain').value = `${a.gameName}#${a.tagLine}`;
-      $('#sPlat').value = a.platform;
-      toast('Compte récupéré depuis le client.');
-    } catch (e) { toast(e, true); }
-  };
   $('#sSave').onclick = async () => {
     const before = mainId();
     const next = {
       api_key: $('#sKey').value.trim(),
       main_riot_id: $('#sMain').value.trim(),
       platform: $('#sPlat').value,
-      league_path: $('#sPath').value.trim(),
-      rp_to_eur: Math.max(0, parseFloat($('#sRate').value) || 7.25) / 1000,
+      league_path: '',
+      rp_to_eur: 0,
     };
     store.set('autoMeta', $('#sAutoMeta').checked);
     try {
       await call('save_settings', { settings: next });
       S.settings = next;
       $('#region').value = next.platform;
-      if (S.skins) S.skins = null;
       toast('Paramètres enregistrés.');
       if (next.api_key && next.main_riot_id && (mainId() !== before || !S.profile)) loadMain();
     } catch (e) { toast(e, true); }
@@ -1969,7 +1883,7 @@ let loadSeq = 0;
 async function loadProfile(name, tag, platform, champAfter = null) {
   const seq = ++loadSeq;
   Object.assign(S, { loading: true, profile: null, matches: [], openMatch: null, all: null, lpHist: null, mastery: null, live: undefined, champDetail: champAfter, histChamp: '', premades: {}, premadeLeft: 0 });
-  if (['settings', 'skins'].includes(S.view)) S.view = 'overview';
+  if (S.view === 'settings') S.view = 'overview';
   render();
   try {
     const p = await call('lookup', { gameName: name, tagLine: tag, platform });
@@ -2063,13 +1977,6 @@ async function checkLive(force) {
   if (p === S.profile) render();
 }
 
-async function loadSkins() {
-  S.skinsLoading = true; render();
-  try { S.skins = await call('skin_collection'); }
-  catch (e) { toast(e, true); }
-  S.skinsLoading = false; render();
-}
-
 function enterView() {
   if (S.view === 'builds' && (!S.meta.status || !S.meta.overview)) loadMeta();
   if (!S.profile) return;
@@ -2124,23 +2031,6 @@ async function trackMain() {
       else if (S.view === 'overview') render();
     }
   } catch {}
-}
-
-let clientTimer;
-async function pollClient() {
-  clearTimeout(clientTimer);
-  const el = $('#clientStatus');
-  try {
-    const a = await call('lcu_account');
-    S.client = a;
-    el.classList.add('on');
-    el.querySelector('.txt').textContent = `Client : ${a.gameName}`;
-  } catch {
-    S.client = null;
-    el.classList.remove('on');
-    el.querySelector('.txt').textContent = 'Client LoL fermé';
-  }
-  clientTimer = setTimeout(pollClient, S.client ? 30000 : 60000);
 }
 
 /* ================================================================ événements */
@@ -2243,7 +2133,6 @@ $('#view').addEventListener('click', async (e) => {
   if (act === 'refresh') { const p = S.profile; return loadProfile(p.game_name, p.tag_line, p.platform); }
   if (act === 'more') return loadMore();
   if (act === 'sync100') return sync100();
-  if (act === 'skins') return loadSkins();
   if (act === 'mastery') return loadMastery();
   if (act === 'live') return checkLive(true);
   if (act === 'fav') { toggleFav(S.profile); toast(isFav(S.profile) ? 'Ajouté aux favoris.' : 'Retiré des favoris.'); return render(); }
@@ -2275,8 +2164,6 @@ $('#view').addEventListener('click', async (e) => {
   const lq = t.closest('[data-lq]');
   if (lq) { S.lpQueue = lq.dataset.lq; return render(); }
 
-  const sr = t.closest('[data-sr]');
-  if (sr) { S.skinRarity = sr.dataset.sr || null; return render(); }
 });
 
 $('#view').addEventListener('submit', (e) => {
@@ -2288,7 +2175,6 @@ $('#view').addEventListener('submit', (e) => {
 });
 
 $('#view').addEventListener('input', (e) => {
-  if (e.target.id === 'skinQ') { S.skinQuery = e.target.value; $('#skinGrid').innerHTML = skinGrid(); }
   if (e.target.id === 'metaQ') {
     S.meta.q = e.target.value;
     const pos = e.target.selectionStart;
@@ -2303,7 +2189,6 @@ $('#view').addEventListener('input', (e) => {
   }
 });
 $('#view').addEventListener('change', (e) => {
-  if (e.target.id === 'skinSort') { S.skinSort = e.target.value; $('#skinGrid').innerHTML = skinGrid(); }
   if (e.target.id === 'mastSort') { S.masterySort = e.target.value; render(); }
   if (e.target.id === 'histChamp') { S.histChamp = e.target.value; render(); }
 });
@@ -2364,7 +2249,6 @@ listen('sync', (ev) => {
     setTimeout(autoMeta, 20000);
   }).catch(() => {});
 
-  pollClient();
   setInterval(trackMain, 10 * 60 * 1000);
   setInterval(() => { if (isMain(S.profile)) checkLive(); }, 3 * 60 * 1000);
 
