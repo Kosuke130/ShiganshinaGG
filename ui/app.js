@@ -111,7 +111,7 @@ const S = {
   client: null,
   premades: {}, premadeLoading: null, premadeLeft: 0,
   coach: {}, cmp: { q: '', b: null, bm: null, loading: false },
-  meta: { status: null, overview: null, patch: 'auto', pos: null, bpos: null, q: '', champ: null, rows: null, spells: {}, sync: null, tab: 'build', muMin: 3, muSort: 'g', roleRows: {} },
+  meta: { status: null, overview: null, patch: 'auto', rank: store.get('metaRank', 'MASTER+'), offMeta: false, pos: null, bpos: null, q: '', champ: null, rows: null, spells: {}, sync: null, tab: 'build', muMin: 3, muSort: 'g', roleRows: {} },
   nav: { stack: [], idx: -1, restoring: false },
 };
 
@@ -989,7 +989,7 @@ function champDrawer() {
   const mast = S.mastery?.list?.find((x) => x.champ_id === id);
   return `<div class="drawer" data-act="close-drawer"><div class="panel" data-stop>
     <div class="dhead" style="background-image:url('${champSplash(id)}')"><button class="btn icon close" data-act="close-drawer">${ICONS.close}</button>
-      <div class="row" style="gap:16px"><img class="cicon lg" src="${champImg(id)}" alt=""><div><h1 style="font-size:30px">${esc(champName(id))}</h1><div class="muted">${esc(c?.title || '')}${c?.tags ? ' · ' + c.tags.map((x) => CLASS_FR[x] || x).join(', ') : ''}</div></div><button class="btn gold" data-act="meta-build" style="margin-left:24px">${ICONS.sword}Build Master+</button></div></div>
+      <div class="row" style="gap:16px"><img class="cicon lg" src="${champImg(id)}" alt=""><div><h1 style="font-size:30px">${esc(champName(id))}</h1><div class="muted">${esc(c?.title || '')}${c?.tags ? ' · ' + c.tags.map((x) => CLASS_FR[x] || x).join(', ') : ''}</div></div><button class="btn gold" data-act="meta-build" style="margin-left:24px">${ICONS.sword}Build & stats</button></div></div>
     <div class="dbody">
       ${t.games ? `<div class="grid g4 mb" style="gap:10px">
         <div class="kpi stat"><div class="label">Parties</div><div class="value">${t.games}</div><div class="sub">${t.wins}V ${t.games - t.wins}D</div></div>
@@ -1168,8 +1168,8 @@ function vSettings() {
       <div class="row"><input class="input" id="sMain" value="${esc(s.main_riot_id)}" placeholder="Nom#TAG" spellcheck="false">
       <select class="input" id="sPlat" style="flex:0 0 110px">${REGIONS.map(([v, l]) => `<option value="${v}"${v === s.platform ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="hint">Affiché au démarrage. Ses LP sont suivis automatiquement et ShiganshinaGG détecte quand il est en partie.</div></div>
-    <div class="field"><label>Builds Master+</label>
-      <label class="row" style="gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font:500 14px var(--ui);color:var(--text)"><input type="checkbox" id="sAutoMeta"${store.get('autoMeta', true) !== false ? ' checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)"> Mise à jour quotidienne : 150 nouvelles parties Master+ du patch en cours, une fois par jour</label>
+    <div class="field"><label>Builds & tier list</label>
+      <label class="row" style="gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;font:500 14px var(--ui);color:var(--text)"><input type="checkbox" id="sAutoMeta"${store.get('autoMeta', true) !== false ? ' checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)"> Mise à jour quotidienne : 150 nouvelles parties du patch en cours (au rang choisi dans Builds &amp; tier list), une fois par jour</label>
       <div class="hint">Environ 5 minutes en arrière-plan, au premier lancement de la journée seulement. Les gros imports (Builds &amp; tier list → +2 000) reprennent tout seuls s'ils sont interrompus.</div></div>
     <div><button class="btn primary" id="sSave" type="button">Enregistrer</button></div>
   </div></div>
@@ -1213,8 +1213,73 @@ const isLegendary = (id) => { const it = itemInfo(id); return it && it.complete 
 const isBoots = (id) => { const it = itemInfo(id); return it && it.boots && it.gold >= 700; };
 const adjWr = (w, g) => (w + 5) / (g + 10);
 function grade(w, g) {
-  const a = adjWr(w, g);
-  return a >= 0.53 ? 'S' : a >= 0.515 ? 'A' : a >= 0.495 ? 'B' : a >= 0.48 ? 'C' : 'D';
+  const a = (w + 100) / (g + 200);
+  return a >= 0.53 ? 'S' : a >= 0.512 ? 'A' : a >= 0.497 ? 'B' : a >= 0.485 ? 'C' : 'D';
+}
+
+/* ---- rangs des données (filtre comme sur les sites de stats) */
+const TIERS_DESC = [...TIERS].reverse();
+const plusOf = (t) => TIERS_DESC.slice(0, TIERS_DESC.indexOf(t) + 1);
+const RANK_GROUPS = [
+  ['CHALLENGER', 'Challenger', ['CHALLENGER']],
+  ...['GRANDMASTER', 'MASTER', 'DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD'].map((t) => [t + '+', TIER_FR[t] + '+', plusOf(t)]),
+  ['ALL', 'Tous les rangs', TIERS_DESC],
+];
+const RANK_SINGLE = TIERS_DESC.slice(1).map((t) => [t, TIER_FR[t], [t]]);
+const RANK_OPTS = [...RANK_GROUPS, ...RANK_SINGLE];
+const metaRankOpt = () => RANK_OPTS.find((o) => o[0] === S.meta.rank) || RANK_GROUPS[3];
+const metaRankName = () => metaRankOpt()[1];
+const metaTiers = () => metaRankOpt()[2];
+const metaTiersArg = () => (S.meta.rank === 'ALL' ? null : `,${metaTiers().join(',')},`);
+const COACH_TIERS = ',CHALLENGER,GRANDMASTER,MASTER,';
+/** Parties importées pour le patch et le rang choisis. */
+function metaCount(patch) {
+  const t = metaTiers();
+  return (S.meta.status?.counts || []).filter((c) => (patch == null || c.patch === patch) && t.includes(c.tier)).reduce((a, c) => a + c.matches, 0);
+}
+function rankSelect() {
+  const opt = (o) => `<option value="${o[0]}"${o[0] === S.meta.rank ? ' selected' : ''}>${o[1]}</option>`;
+  const ic = metaTiers()[metaTiers().length - 1];
+  return `<label class="rank-pick">${emblem(ic, 'I', 'xs')}<select id="metaRank"><optgroup label="Groupes">${RANK_GROUPS.map(opt).join('')}</optgroup><optgroup label="Un seul rang">${RANK_SINGLE.map(opt).join('')}</optgroup></select></label>`;
+}
+
+/* ---- tier : winrate lissé (petits échantillons ramenés vers 50 %) + popularité, classé par rôle */
+const TIER_CUTS = [[0.06, 'S+'], [0.2, 'S'], [0.45, 'A'], [0.75, 'B'], [0.9, 'C'], [1.01, 'D']];
+const tierCls = (t) => (t === 'S+' ? 'Sp' : t);
+const tierBadge = (t) => `<span class="tier-grade ${tierCls(t)}">${t}</span>`;
+function computeTiers(ov) {
+  if (!ov?.list) return {};
+  if (ov._tiers) return ov._tiers;
+  const total = {};
+  for (const e of ov.list) total[e.champ_id] = (total[e.champ_id] || 0) + e.games;
+  const minG = Math.max(20, Math.round(ov.matches * 0.008));
+  const byPos = {};
+  for (const e of ov.list) {
+    if (!e.pos) continue;
+    e.share = e.games / total[e.champ_id];
+    e.pick = ov.matches ? e.games / ov.matches : 0;
+    e.adj = (e.wins + 100) / (e.games + 200);
+    e.score = e.adj + 0.008 * Math.log(Math.max(e.pick, 0.001) / 0.02);
+    e.offMeta = e.share < 0.1;
+    e.few = e.games < minG;
+    (byPos[e.pos] ??= []).push(e);
+  }
+  const map = {};
+  for (const list of Object.values(byPos)) {
+    const ranked = list.filter((e) => !e.offMeta && !e.few).sort((a, b) => b.score - a.score);
+    const n = Math.max(1, ranked.length);
+    for (const e of list) {
+      const better = ranked.filter((r) => r.score > e.score).length;
+      e.tier = TIER_CUTS.find(([q]) => (better + 0.5) / n < q)?.[1] || 'D';
+      // hors méta ou trop peu de parties : jamais au-dessus de A
+      // hors méta, trop peu de parties ou winrate lissé sous 50 % : jamais au-dessus de A
+      if ((e.offMeta || e.few || e.adj < 0.5) && (e.tier === 'S+' || e.tier === 'S')) e.tier = 'A';
+      e.tierN = ['S+', 'S', 'A', 'B', 'C', 'D'].indexOf(e.tier);
+      map[e.champ_id + '|' + e.pos] = e;
+    }
+  }
+  ov._tiers = map;
+  return map;
 }
 function tally(rows, keyFn) {
   const map = new Map();
@@ -1249,7 +1314,7 @@ function metaPatch() {
 async function loadMeta() {
   try {
     S.meta.status = await call('meta_status');
-    S.meta.overview = await call('meta_overview', { patch: metaPatch() });
+    S.meta.overview = await call('meta_overview', { patch: metaPatch(), tiers: metaTiersArg() });
     if (S.meta.champ != null) await loadMetaChamp(S.meta.champ, false);
   } catch (e) { toast(e, true); }
   if (S.view === 'builds') render();
@@ -1260,7 +1325,7 @@ async function loadMetaChamp(id, rerender = true) {
   if (rerender) render();
   try {
     const [rows] = await Promise.all([
-      call('meta_rows', { champId: id, patch: metaPatch() }),
+      call('meta_rows', { champId: id, patch: metaPatch(), tiers: metaTiersArg() }),
       S.meta.spells[id] ? null : call('champ_spells', { id: champ(id)?.id, version: ddv() }).then((sp) => (S.meta.spells[id] = sp)).catch(() => {}),
     ]);
     if (S.meta.champ === id) S.meta.rows = rows;
@@ -1268,17 +1333,18 @@ async function loadMetaChamp(id, rerender = true) {
   if (rerender && S.view === 'builds') render();
 }
 
-/** Import Master+ ; la tâche est mémorisée pour reprendre au prochain lancement si l'appli est fermée. */
-async function metaSync(count, auto = false) {
+/** Import des parties du rang choisi ; la tâche est mémorisée pour reprendre au prochain lancement si l'appli est fermée. */
+async function metaSync(count, auto = false, rank = S.meta.rank) {
   const plat = S.profile?.platform || S.settings.platform || 'euw1';
   const patch = curPatch();
-  S.meta.sync = { done: 0, total: count, phase: 'Démarrage…', auto, start: Date.now() };
+  const opt = RANK_OPTS.find((o) => o[0] === rank) || metaRankOpt();
+  S.meta.sync = { done: 0, total: count, phase: 'Démarrage…', auto, start: Date.now(), rank: opt[1] };
   S.meta.cancelled = false;
-  store.set('metaJob', { patch, remaining: count });
+  store.set('metaJob', { patch, remaining: count, rank: opt[0] });
   render();
   try {
-    const n = await call('meta_sync', { platform: plat, count, patch: patch || null });
-    if (!auto || n) toast(n ? `Builds : ${fmt(n)} parties Master+ du patch ${patch} importées.` : `Aucune nouvelle partie Master+ du patch ${patch} disponible pour l'instant.`);
+    const n = await call('meta_sync', { platform: plat, count, patch: patch || null, tiers: opt[2] });
+    if (!auto || n) toast(n ? `Builds : ${fmt(n)} parties ${opt[1]} du patch ${patch} importées.` : `Aucune nouvelle partie ${opt[1]} du patch ${patch} disponible pour l'instant.`);
     S.coach = {};
   } catch (e) { if (!auto) toast(e, true); }
   // terminé, arrêté ou plus de parties disponibles : rien à reprendre
@@ -1292,7 +1358,7 @@ const META_RATE = 32; // parties par minute avec une clé limitée à 100 requê
 function metaSyncBox() {
   const st = S.meta.status;
   const sy = S.meta.sync;
-  const cur = st?.patches?.find((p) => p.patch === curPatch())?.matches || 0;
+  const cur = metaCount(curPatch());
   if (sy) {
     const left = Math.max(0, sy.total - sy.done);
     const el = (Date.now() - (sy.start || Date.now())) / 60000;
@@ -1301,9 +1367,9 @@ function metaSyncBox() {
     return `<div class="card" style="min-width:380px"><div class="row" style="justify-content:space-between"><b>${esc(sy.phase || 'Import…')}</b><button class="btn sm" data-act="meta-cancel">Arrêter</button></div>
       <div class="progress mt" style="margin-top:10px"><i style="width:${pct(sy.done, sy.total)}%"></i></div>
       <div class="data-note" style="margin-top:6px">${fmt(sy.done)} / ${fmt(sy.total)} parties · ${eta >= 60 ? `${Math.floor(eta / 60)} h ${Math.round(eta % 60)} min` : `${Math.max(1, Math.ceil(eta))} min`} restantes · ${Math.round(rate)} parties/min</div>
-      <div class="data-note">Continue en arrière-plan et reprend tout seul si tu fermes l'appli.</div></div>`;
+      <div class="data-note">${sy.rank ? `Rang : ${esc(sy.rank)} · ` : ''}continue en arrière-plan et reprend tout seul si tu fermes l'appli.</div></div>`;
   }
-  return `<div class="col" style="align-items:flex-end;gap:6px"><div class="row wrap" style="gap:8px;justify-content:flex-end"><span class="tag gold">${fmt(cur)} parties du patch ${esc(curPatch())}</span>
+  return `<div class="col" style="align-items:flex-end;gap:6px"><div class="row wrap" style="gap:8px;justify-content:flex-end"><span class="tag gold">${fmt(cur)} parties ${esc(metaRankName())} · patch ${esc(curPatch())}</span>
     <button class="btn sm" data-msync="500" data-tip="≈ 15 minutes">+500</button>
     <button class="btn sm primary" data-msync="2000" data-tip="≈ 1 heure, en arrière-plan">+2 000</button>
     <button class="btn sm" data-msync="5000" data-tip="≈ 2 h 30, en arrière-plan (reprend tout seul)">+5 000</button></div>
@@ -1315,7 +1381,7 @@ function patchChips() {
   if (!st?.patches?.length) return '';
   const cur = metaPatch();
   const ps = [...st.patches].sort((a, b) => b.patch.localeCompare(a.patch, undefined, { numeric: true })).slice(0, 3);
-  return `<div class="chips">${ps.map((p) => `<button class="chip${cur === p.patch ? ' on' : ''}" data-bpatch="${esc(p.patch)}">Patch ${esc(p.patch)} <span class="dim">${p.matches}</span></button>`).join('')}
+  return `<div class="chips">${ps.map((p) => `<button class="chip${cur === p.patch ? ' on' : ''}" data-bpatch="${esc(p.patch)}">Patch ${esc(p.patch)} <span class="dim">${metaCount(p.patch)}</span></button>`).join('')}
     <button class="chip${cur === null ? ' on' : ''}" data-bpatch="all">Tous les patchs</button></div>`;
 }
 
@@ -1326,38 +1392,39 @@ function vBuilds() {
 
 function vTierList() {
   const ov = S.meta.overview;
-  const head = `<div class="page-title"><div><h1>Builds & <em>tier list</em></h1><p>Calculés à partir de vraies parties classées Master, Grand Maître et Challenger de ta région</p></div>${metaSyncBox()}</div>`;
+  const rn = metaRankName();
+  const head = `<div class="page-title"><div><h1>Builds & <em>tier list</em></h1><p>Calculés à partir de vraies parties classées de ta région · rang : <b>${esc(rn)}</b></p></div>${metaSyncBox()}</div>`;
+  if (!ov) return `<div class="fade-in">${head}${loader('Calcul de la tier list…')}</div>`;
+  const bar = (extra = '') => `<div class="toolbar mb">${rankSelect()}${extra}<span class="grow"></span>${patchChips()}</div>`;
   if (!ov?.matches) {
-    return `<div class="fade-in">${head}<div class="card">${empty('sword', 'Importe des parties de haut niveau', 'ShiganshinaGG télécharge des parties récentes des meilleurs joueurs de ta région (Master+) pour calculer les meilleurs runes, objets, sorts et ordres de compétences de chaque champion. Avec une clé de développement, 300 parties prennent environ 20 minutes : l\'import continue pendant que tu utilises l\'appli.', '<button class="btn primary" data-msync="300">Importer 300 parties</button>')}</div></div>`;
+    return `<div class="fade-in">${head}${bar()}<div class="card">${empty('sword', `Aucune partie ${rn} importée`, `ShiganshinaGG télécharge des parties récentes de joueurs de ce rang dans ta région pour calculer la tier list, les runes, objets, sorts et ordres de compétences de chaque champion. Avec une clé de développement, 300 parties prennent environ 10 minutes : l'import continue pendant que tu utilises l'appli.`, `<button class="btn primary" data-msync="300">Importer 300 parties ${esc(rn)}</button>`)}</div></div>`;
   }
   const q = S.meta.q.trim().toLowerCase();
-  const byChamp = {};
-  for (const e of ov.list) (byChamp[e.champ_id] ??= []).push(e);
-  let rows = ov.list.filter((e) => e.pos && (!S.meta.pos || e.pos === S.meta.pos) && (!q || champName(e.champ_id).toLowerCase().includes(q)));
-  if (!S.meta.pos) {
-    // un seul rôle (le principal) par champion
-    const best = {};
-    for (const e of rows) if (!best[e.champ_id] || e.games > best[e.champ_id].games) best[e.champ_id] = e;
-    rows = Object.values(best);
-  }
-  rows = rows.filter((e) => e.games >= 3).sort((a, b) => adjWr(b.wins, b.games) - adjWr(a.wins, a.games));
+  const tiers = computeTiers(ov);
+  const all = Object.values(tiers);
+  let rows = all.filter((e) => (!S.meta.pos || e.pos === S.meta.pos) && (!q || champName(e.champ_id).toLowerCase().includes(q)));
+  const hidden = rows.filter((e) => e.offMeta || e.few).length;
+  if (!S.meta.offMeta) rows = rows.filter((e) => !e.offMeta && !e.few);
+  rows.sort((a, b) => a.tierN - b.tierN || b.score - a.score);
   const chips = [[null, 'Tous les rôles'], ...ROLES.map(([k, l]) => [k, l])].map(([k, l]) => `<button class="chip${S.meta.pos === k ? ' on' : ''}" data-bpos="${k ?? ''}">${l}</button>`).join('');
+  const toggle = `<label class="switch-row" data-tip="Affiche aussi les champions joués hors de leur rôle habituel (moins de 10 % de leurs parties) ou trop peu joués pour être fiables"><input type="checkbox" id="metaOff"${S.meta.offMeta ? ' checked' : ''}><i></i>Hors méta <span class="dim">${hidden}</span></label>`;
   return `<div class="fade-in">${head}
-    <div class="toolbar mb"><input class="input" id="metaQ" placeholder="Chercher un champion…" value="${esc(S.meta.q)}" style="width:220px"><div class="chips">${chips}</div><span class="grow"></span>${patchChips()}</div>
-    <div class="card flush"><table><thead><tr><th style="width:40px">#</th><th>Champion</th><th>Rôle</th><th>Tier</th><th>Winrate</th><th>Pick</th><th>Ban</th><th>Parties</th></tr></thead><tbody>
+    ${bar(`<input class="input" id="metaQ" placeholder="Chercher un champion…" value="${esc(S.meta.q)}" style="width:200px"><div class="chips">${chips}</div>${toggle}`)}
+    <div class="card flush"><table class="tier-table"><thead><tr><th style="width:40px">#</th><th>Champion</th><th>Voie</th><th>Tier</th><th>Winrate</th><th>Pick</th><th>Ban</th><th>Parties</th></tr></thead><tbody>
     ${rows.map((e, i) => {
       const w = pct(e.wins, e.games);
       const r = roleOf(e.pos);
-      return `<tr class="click" data-bchamp="${e.champ_id}" data-bchamppos="${e.pos}"><td class="dim">${i + 1}</td>
-        <td><div class="row" style="gap:10px"><img class="cicon sm" loading="lazy" src="${champImg(e.champ_id)}" alt=""><b>${esc(champName(e.champ_id))}</b></div></td>
-        <td><span class="row" style="gap:6px;color:var(--muted)">${r ? r[2].replace('<svg', '<svg width="16" height="16"') + r[1] : '—'}</span></td>
-        <td><span class="tier-grade ${grade(e.wins, e.games)}">${grade(e.wins, e.games)}</span></td>
+      const note = e.offMeta ? ' <span class="tag" style="font-size:10px;padding:1px 6px">hors méta</span>' : e.few ? ' <span class="tag" style="font-size:10px;padding:1px 6px">peu joué</span>' : '';
+      return `<tr class="click${e.offMeta || e.few ? ' dimrow' : ''}" data-bchamp="${e.champ_id}" data-bchamppos="${e.pos}"><td class="dim">${i + 1}</td>
+        <td><div class="row" style="gap:10px"><img class="cicon sm" loading="lazy" src="${champImg(e.champ_id)}" alt=""><b>${esc(champName(e.champ_id))}</b>${note}</div></td>
+        <td><div class="lane-cell" data-tip="${esc(r?.[1] || '')} : ${fmt1(e.share * 100)} % des parties de ce champion">${r ? r[2].replace('<svg', '<svg width="16" height="16"') : '—'}<small>${fmt1(e.share * 100)}%</small></div></td>
+        <td>${tierBadge(e.tier)}</td>
         <td><b class="${wrCls(w)}">${w}%</b></td>
-        <td>${fmt1((e.games * 100) / ov.matches)}%</td>
+        <td>${fmt1(e.pick * 100)}%</td>
         <td class="muted">${fmt1(((ov.bans[e.champ_id] || 0) * 100) / ov.matches)}%</td>
-        <td class="muted">${e.games}${e.games < 15 ? ' <span class="dim" data-tip="Peu de parties : résultat encore peu fiable">·</span>' : ''}</td></tr>`;
+        <td class="muted">${fmt(e.games)}</td></tr>`;
     }).join('') || '<tr><td colspan="8" class="muted" style="padding:20px">Aucun champion ne correspond.</td></tr>'}</tbody></table></div>
-    <p class="data-note mt">Le tier tient compte du nombre de parties : un champion joué 3 fois à 100% de victoires n'est pas classé S. Plus tu importes de parties, plus la liste est fiable.</p></div>`;
+    <p class="data-note mt">${fmt(ov.matches)} parties ${esc(rn)}. Le tier combine le winrate (lissé : avec peu de parties il est ramené vers 50 %) et la popularité, et il est calculé rôle par rôle. Les champions joués hors de leur rôle habituel ou moins de ${Math.max(20, Math.round(ov.matches * 0.008))} fois sont masqués (« Hors méta » pour les voir).</p></div>`;
 }
 
 const pctWr = (e, n) => `<div class="stats"><b class="${wrCls(pct(e.w, e.g))}">${pct(e.w, e.g)}%</b> WR<div class="dim">${pct(e.g, n)}% · ${e.g} parties</div></div>`;
@@ -1434,7 +1501,7 @@ function buildAgg(rows) {
   // durée, palier
   const buckets = [[0, 20, '< 20'], [20, 25, '20-25'], [25, 30, '25-30'], [30, 35, '30-35'], [35, 99, '35 +']];
   out.byDur = buckets.map(([a, b, l]) => { const s = rows.filter((r) => r.dur / 60 >= a && r.dur / 60 < b); return { label: l, g: s.length, w: s.filter((r) => r.win).length }; });
-  out.byTier = ['MASTER', 'GRANDMASTER', 'CHALLENGER'].map((t) => { const s = rows.filter((r) => r.tier === t); return { tier: t, g: s.length, w: s.filter((r) => r.win).length }; });
+  out.byTier = TIERS.filter((t) => rows.some((r) => r.tier === t)).map((t) => { const s = rows.filter((r) => r.tier === t); return { tier: t, g: s.length, w: s.filter((r) => r.win).length }; });
   out.avg = statAverages(rows);
   out.perf = rows.reduce((a, r) => (a.k += r.k, a.d += r.d, a.a += r.a, a.cs += r.cs, a.dmg += r.dmg, a.min += r.dur / 60, a), { k: 0, d: 0, a: 0, cs: 0, dmg: 0, min: 0 });
   return out;
@@ -1608,7 +1675,7 @@ async function loadRoleRows(pos) {
   S.meta.roleRows ??= {};
   if (S.meta.roleRows[pos] !== undefined) return;
   S.meta.roleRows[pos] = null;
-  try { S.meta.roleRows[pos] = await call('meta_rows', { champId: null, pos, patch: metaPatch() }); } catch { S.meta.roleRows[pos] = []; }
+  try { S.meta.roleRows[pos] = await call('meta_rows', { champId: null, pos, patch: metaPatch(), tiers: metaTiersArg() }); } catch { S.meta.roleRows[pos] = []; }
   if (S.view === 'builds') render();
 }
 
@@ -1622,21 +1689,22 @@ function vBuildChamp() {
   const pos = S.meta.bpos && posList.some((p) => p.key === S.meta.bpos) ? S.meta.bpos : posList[0]?.key;
   const rows = pos ? all.filter((r) => r.pos === pos) : all;
   const ov = S.meta.overview;
+  if (!ov) return `<div class="page-title"><div class="row">${back}<h1>${esc(champName(id))}</h1></div></div>${loader('Chargement…')}`;
   const tabs = [['build', 'Build'], ['runes', 'Runes'], ['items', 'Objets'], ['skills', 'Compétences'], ['matchups', 'Matchups'], ['stats', 'Statistiques']];
   const head = `<div class="bhead mb"><div class="splash" style="background-image:url('${champSplash(id)}')"></div>
     <img class="cicon lg" src="${champImg(id)}" alt="" style="width:72px;height:72px;border-radius:14px;border:2px solid var(--gold)">
     <div class="grow"><div class="row" style="gap:10px;margin-bottom:6px">${back}</div><h1 style="font-size:34px">${esc(champName(id))} <span class="muted" style="font-size:18px;font-weight:400">${esc(c?.title || '')}</span></h1>
       <div class="chips mt" style="margin-top:10px">${posList.map((p) => `<button class="chip${p.key === pos ? ' on' : ''}" data-bpos2="${p.key}">${roleOf(p.key)?.[1] || p.key} <span class="dim">${p.g}</span></button>`).join('')}</div></div>
-    ${rows.length ? `<div class="row" style="gap:12px">${[['Tier', `<span class="tier-grade ${grade(rows.filter((r) => r.win).length, rows.length)}">${grade(rows.filter((r) => r.win).length, rows.length)}</span>`], ['Winrate', `<span class="${wrCls(pct(rows.filter((r) => r.win).length, rows.length))}">${pct(rows.filter((r) => r.win).length, rows.length)}%</span>`], ['Pick', fmt1((rows.length * 100) / ov.matches) + '%'], ['Ban', fmt1(((ov.bans[id] || 0) * 100) / ov.matches) + '%'], ['Parties', rows.length]].map(([l, v]) => `<div class="kpi stat" style="min-width:84px;background:rgba(15,15,20,.75)"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>` : ''}
+    ${rows.length ? `<div class="row" style="gap:12px">${[['Tier', tierBadge(computeTiers(ov)[id + '|' + pos]?.tier || grade(rows.filter((r) => r.win).length, rows.length))], ['Winrate', `<span class="${wrCls(pct(rows.filter((r) => r.win).length, rows.length))}">${pct(rows.filter((r) => r.win).length, rows.length)}%</span>`], ['Pick', fmt1((rows.length * 100) / ov.matches) + '%'], ['Ban', fmt1(((ov.bans[id] || 0) * 100) / ov.matches) + '%'], ['Parties', rows.length]].map(([l, v]) => `<div class="kpi stat" style="min-width:84px;background:rgba(15,15,20,.75)"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>` : ''}
   </div>`;
-  if (!rows.length) return `<div class="fade-in">${head}<div class="card">${empty('sword', 'Pas encore de données', `Aucune partie Master+ avec ${esc(champName(id))} pour ce filtre. Importe plus de parties ou choisis « Tous les patchs ».`, '<button class="btn primary" data-msync="300">Importer 300 parties</button>')}</div></div>`;
+  if (!rows.length) return `<div class="fade-in">${head}<div class="card">${empty('sword', 'Pas encore de données', `Aucune partie ${esc(metaRankName())} avec ${esc(champName(id))} pour ce filtre. Importe plus de parties ou choisis « Tous les patchs ».`, '<button class="btn primary" data-msync="300">Importer 300 parties</button>')}</div></div>`;
   const b = buildAgg(rows);
   b.rows = rows;
   const few = b.n < 20 ? `<div class="warn-note mb">Seulement ${b.n} parties pour ce champion à ce rôle : les statistiques sont indicatives. L'import automatique en ajoute à chaque ouverture.</div>` : '';
   const tab = S.meta.tab || 'build';
   const body = tab === 'runes' ? buildTabRunes(b) : tab === 'items' ? buildTabItems(b) : tab === 'skills' ? buildTabSkills(b, id) : tab === 'matchups' ? buildTabMatchups(b) : tab === 'stats' ? buildTabStats(b, pos) : buildTabBuild(b, id);
   return `<div class="fade-in">${head}${few}
-    <div class="row mb" style="justify-content:space-between">${patchChips()}<span class="data-note">${b.n} parties Master+${b.tl < b.n ? ` · ${b.tl} avec chronologie` : ''}</span></div>
+    <div class="row mb" style="justify-content:space-between"><div class="row" style="gap:10px">${rankSelect()}${patchChips()}</div><span class="data-note">${b.n} parties ${esc(metaRankName())}${b.tl < b.n ? ` · ${b.tl} avec chronologie` : ''}</span></div>
     <div class="tabs big-tabs">${tabs.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-btab="${k}">${l}</button>`).join('')}</div>
     ${body}</div>`;
 }
@@ -1666,9 +1734,9 @@ async function loadCoach(m, me) {
   if (S.coach[key] || !me.pos || isArena(m) || m.queue === 450) return;
   S.coach[key] = 'loading';
   try {
-    let rows = await call('meta_rows', { champId: me.champ_id, pos: me.pos, patch: null });
+    let rows = await call('meta_rows', { champId: me.champ_id, pos: me.pos, patch: null, tiers: COACH_TIERS });
     let scope = 'champ';
-    if (rows.length < 8) { rows = await call('meta_rows', { champId: null, pos: me.pos, patch: null }); scope = 'role'; }
+    if (rows.length < 8) { rows = await call('meta_rows', { champId: null, pos: me.pos, patch: null, tiers: COACH_TIERS }); scope = 'role'; }
     S.coach[key] = { rows, scope };
   } catch (e) { S.coach[key] = { rows: [], scope: 'role' }; }
   render();
@@ -1827,7 +1895,7 @@ async function autoMeta() {
   try { S.meta.status = await call('meta_status'); } catch {}
   if (S.meta.status?.running) return;
   const job = store.get('metaJob', null);
-  if (job && job.patch === curPatch() && job.remaining > 0) return metaSync(job.remaining, true);
+  if (job && job.patch === curPatch() && job.remaining > 0) return metaSync(job.remaining, true, job.rank || 'MASTER+');
   if (store.get('autoMeta', true) === false) return;
   const last = store.get('metaDailyAt', 0);
   if (Date.now() - last < 20 * 3600 * 1000) return;
@@ -2191,6 +2259,8 @@ $('#view').addEventListener('input', (e) => {
 $('#view').addEventListener('change', (e) => {
   if (e.target.id === 'mastSort') { S.masterySort = e.target.value; render(); }
   if (e.target.id === 'histChamp') { S.histChamp = e.target.value; render(); }
+  if (e.target.id === 'metaRank') { S.meta.rank = e.target.value; store.set('metaRank', S.meta.rank); S.meta.overview = null; S.meta.roleRows = {}; render(); loadMeta(); }
+  if (e.target.id === 'metaOff') { S.meta.offMeta = e.target.checked; render(); }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && S.champDetail != null) { S.champDetail = null; render(); }
@@ -2224,7 +2294,7 @@ listen('meta', (ev) => {
     if (S.view === 'builds' && S.meta.champ == null) {
       if (S.meta.sync.done && S.meta.sync.done % 50 === 0 && !S.meta.ovLoading) {
         S.meta.ovLoading = true;
-        call('meta_overview', { patch: metaPatch() }).then((ov) => { S.meta.overview = ov; }).finally(() => { S.meta.ovLoading = false; });
+        call('meta_overview', { patch: metaPatch(), tiers: metaTiersArg() }).then((ov) => { S.meta.overview = ov; }).finally(() => { S.meta.ovLoading = false; });
         call('meta_status').then((st) => { S.meta.status = st; });
       }
       render();

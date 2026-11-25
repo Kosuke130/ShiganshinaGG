@@ -355,11 +355,15 @@ use std::sync::atomic::Ordering;
 fn meta_status(state: State<'_, AppState>) -> Value {
     backfill_meta_parts(&state);
     let db = state.db.lock().unwrap();
-    let patches = db::meta_patches(&db);
-    let total: i64 = patches.iter().map(|p| p.1).sum();
+    let counts = db::meta_patches(&db);
+    let mut per_patch: HashMap<String, i64> = HashMap::new();
+    for (p, _, n) in &counts {
+        *per_patch.entry(p.clone()).or_default() += n;
+    }
     json!({
-        "matches": total,
-        "patches": patches.iter().map(|(p, n)| json!({"patch": p, "matches": n})).collect::<Vec<_>>(),
+        "matches": per_patch.values().sum::<i64>(),
+        "patches": per_patch.iter().map(|(p, n)| json!({"patch": p, "matches": n})).collect::<Vec<_>>(),
+        "counts": counts.iter().map(|(p, t, n)| json!({"patch": p, "tier": t, "matches": n})).collect::<Vec<_>>(),
         "running": state.meta_running.load(Ordering::SeqCst),
     })
 }
@@ -369,13 +373,28 @@ fn meta_cancel(state: State<'_, AppState>) {
     state.meta_cancel.store(true, Ordering::SeqCst);
 }
 
+const ALL_TIERS: [&str; 10] = ["CHALLENGER", "GRANDMASTER", "MASTER", "DIAMOND", "EMERALD", "PLATINUM", "GOLD", "SILVER", "BRONZE", "IRON"];
+
 #[tauri::command]
-async fn meta_sync(app: AppHandle, state: State<'_, AppState>, platform: String, count: u32, patch: Option<String>) -> R<u32> {
+async fn meta_sync(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    platform: String,
+    count: u32,
+    patch: Option<String>,
+    tiers: Option<Vec<String>>,
+) -> R<u32> {
     if state.meta_running.swap(true, Ordering::SeqCst) {
         return Err("Un import est déjà en cours.".into());
     }
     state.meta_cancel.store(false, Ordering::SeqCst);
-    let res = meta_sync_inner(&app, &state, &platform, count, patch.as_deref()).await;
+    let tiers: Vec<String> = tiers
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| vec!["CHALLENGER".into(), "GRANDMASTER".into(), "MASTER".into()])
+        .into_iter()
+        .filter(|t| ALL_TIERS.contains(&t.as_str()))
+        .collect();
+    let res = meta_sync_inner(&app, &state, &platform, count, patch.as_deref(), &tiers).await;
     state.meta_running.store(false, Ordering::SeqCst);
     let _ = app.emit("meta", json!({"done": res.as_ref().copied().unwrap_or(0), "total": count, "finished": true}));
     res
@@ -387,49 +406,104 @@ fn patch_older(a: &str, b: &str) -> bool {
     v(a) < v(b)
 }
 
-async fn meta_sync_inner(app: &AppHandle, st: &AppState, platform: &str, count: u32, patch: Option<&str>) -> R<u32> {
+fn tier_fr(t: &str) -> &'static str {
+    match t {
+        "CHALLENGER" => "Challenger",
+        "GRANDMASTER" => "Grand Maître",
+        "MASTER" => "Maître",
+        "DIAMOND" => "Diamant",
+        "EMERALD" => "Émeraude",
+        "PLATINUM" => "Platine",
+        "GOLD" => "Or",
+        "SILVER" => "Argent",
+        "BRONZE" => "Bronze",
+        _ => "Fer",
+    }
+}
+
+/// Un rang à parcourir : pages de classement restantes et joueurs en attente.
+struct TierSrc {
+    tier: String,
+    pages: VecDeque<String>,
+    players: VecDeque<String>,
+}
+
+async fn meta_sync_inner(app: &AppHandle, st: &AppState, platform: &str, count: u32, patch: Option<&str>, tiers: &[String]) -> R<u32> {
     let reg = riot::regional(platform);
     let emit = |done: u32, phase: &str| {
         let _ = app.emit("meta", json!({"done": done, "total": count, "phase": phase}));
     };
-    emit(0, "Lecture du classement Master+…");
-    // joueurs Challenger, Grand Maître et Maître
-    let mut players: Vec<(String, String, i64)> = vec![];
-    for (path, tier) in [("challengerleagues", "CHALLENGER"), ("grandmasterleagues", "GRANDMASTER"), ("masterleagues", "MASTER")] {
-        let url = format!("https://{platform}.api.riotgames.com/lol/league/v4/{path}/by-queue/RANKED_SOLO_5x5");
-        if let Some(v) = riot::get_bg(st, &url).await? {
-            for e in v["entries"].as_array().map(|a| a.as_slice()).unwrap_or_default() {
-                if let Some(pu) = e["puuid"].as_str() {
-                    players.push((pu.to_string(), tier.to_string(), e["leaguePoints"].as_i64().unwrap_or(0)));
+    // pages de classement de chaque rang, lues seulement quand on en a besoin
+    let mut srcs: Vec<TierSrc> = tiers
+        .iter()
+        .map(|t| {
+            let mut pages = VecDeque::new();
+            match t.as_str() {
+                "CHALLENGER" | "GRANDMASTER" | "MASTER" => {
+                    let path = format!("{}leagues", t.to_lowercase());
+                    pages.push_back(format!("https://{platform}.api.riotgames.com/lol/league/v4/{path}/by-queue/RANKED_SOLO_5x5"));
+                }
+                _ => {
+                    for page in 1..=5 {
+                        for div in ["I", "II", "III", "IV"] {
+                            pages.push_back(format!("https://{platform}.api.riotgames.com/lol/league/v4/entries/RANKED_SOLO_5x5/{t}/{div}?page={page}"));
+                        }
+                    }
                 }
             }
-        }
-        if players.len() > 3000 {
-            break;
-        }
+            TierSrc { tier: t.clone(), pages, players: VecDeque::new() }
+        })
+        .collect();
+    if srcs.is_empty() {
+        return Err("Aucun rang choisi.".into());
     }
-    if players.is_empty() {
-        return Err("Impossible de lire le classement Master+ de cette région.".into());
-    }
-    // on privilégie les joueurs les moins récemment parcourus, puis les meilleurs LP
-    let scanned = db::scanned_get(&st.db.lock().unwrap());
-    players.sort_by_key(|(pu, _, lp)| (scanned.get(pu).copied().unwrap_or(0), -lp));
-
+    // plusieurs rangs : on alterne, quelques parties par joueur, pour répartir l'échantillon
+    let per_player: u32 = if srcs.len() > 1 { 8 } else { 100 };
     let since = (now_ms() / 1000) - 14 * 86400;
     let mut done = 0u32;
-    for (pu, tier, _) in players {
-        if done >= count || st.meta_cancel.load(Ordering::SeqCst) {
+    let mut found_any = false;
+    let mut turn = 0usize;
+    while done < count && !st.meta_cancel.load(Ordering::SeqCst) {
+        if srcs.iter().all(|s| s.players.is_empty() && s.pages.is_empty()) {
             break;
         }
-        emit(done, "Import des parties…");
+        let i = turn % srcs.len();
+        turn += 1;
+        if srcs[i].players.is_empty() {
+            let Some(url) = srcs[i].pages.pop_front() else { continue };
+            emit(done, &format!("Lecture du classement {}…", tier_fr(&srcs[i].tier)));
+            if let Some(v) = riot::get_bg(st, &url).await? {
+                let entries = v.get("entries").and_then(|e| e.as_array()).or(v.as_array()).cloned().unwrap_or_default();
+                let scanned = db::scanned_get(&st.db.lock().unwrap());
+                let fresh = now_ms() - 6 * 3600 * 1000;
+                let mut list: Vec<(String, i64, i64)> = entries
+                    .iter()
+                    .filter_map(|e| Some((e["puuid"].as_str()?.to_string(), e["leaguePoints"].as_i64().unwrap_or(0))))
+                    .map(|(pu, lp)| {
+                        let ts = scanned.get(&pu).copied().unwrap_or(0);
+                        (pu, ts, lp)
+                    })
+                    .filter(|(_, ts, _)| *ts < fresh)
+                    .collect();
+                // les joueurs les moins récemment parcourus, puis les meilleurs LP
+                list.sort_by_key(|(_, ts, lp)| (*ts, -lp));
+                srcs[i].players.extend(list.into_iter().map(|(pu, _, _)| pu));
+            }
+            continue;
+        }
+        found_any = true;
+        let Some(pu) = srcs[i].players.pop_front() else { continue };
+        let tier = srcs[i].tier.clone();
+        emit(done, &format!("Import des parties {}…", tier_fr(&tier)));
         let url = format!("https://{reg}.api.riotgames.com/lol/match/v5/matches/by-puuid/{pu}/ids?queue=420&type=ranked&start=0&count=100&startTime={since}");
         let ids: Vec<String> = riot::get_bg(st, &url)
             .await?
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         db::scanned_set(&st.db.lock().unwrap(), &pu, now_ms());
+        let mut mine = 0u32;
         for id in ids {
-            if done >= count || st.meta_cancel.load(Ordering::SeqCst) {
+            if done >= count || mine >= per_player || st.meta_cancel.load(Ordering::SeqCst) {
                 break;
             }
             if db::meta_has(&st.db.lock().unwrap(), &id) {
@@ -472,8 +546,12 @@ async fn meta_sync_inner(app: &AppHandle, st: &AppState, platform: &str, count: 
             db::meta_save(&st.db.lock().unwrap(), &id, &tier, &lite.patch, lite.creation);
             save_meta_parts(st, &lite, tl_data.as_deref(), &tier);
             done += 1;
-            emit(done, "Import des parties…");
+            mine += 1;
+            emit(done, &format!("Import des parties {}…", tier_fr(&tier)));
         }
+    }
+    if !found_any && done == 0 {
+        return Err("Impossible de lire le classement de ce rang dans ta région.".into());
     }
     Ok(done)
 }
@@ -527,7 +605,7 @@ fn build_meta_rows(m: &MatchLite, tl: Option<&str>, tier: &str) -> Vec<db::PartR
 fn save_meta_parts(st: &AppState, m: &MatchLite, tl: Option<&str>, tier: &str) {
     let rows = build_meta_rows(m, tl, tier);
     let bans: Vec<i64> = m.teams.iter().flat_map(|t| t.bans.clone()).collect();
-    db::meta_parts_save(&st.db.lock().unwrap(), &m.id, &m.patch, &rows, &bans);
+    db::meta_parts_save(&st.db.lock().unwrap(), &m.id, &m.patch, tier, &rows, &bans);
 }
 
 /// Recalcule la table précalculée à partir des parties méta déjà importées (une seule fois).
@@ -543,8 +621,8 @@ fn backfill_meta_parts(st: &AppState) {
 
 /// Popularité et winrate de chaque champion par rôle dans les parties méta.
 #[tauri::command]
-fn meta_overview(state: State<'_, AppState>, patch: Option<String>) -> Value {
-    let (matches, list, bans) = db::meta_overview(&state.db.lock().unwrap(), patch.as_deref());
+fn meta_overview(state: State<'_, AppState>, patch: Option<String>, tiers: Option<String>) -> Value {
+    let (matches, list, bans) = db::meta_overview(&state.db.lock().unwrap(), patch.as_deref(), tiers.as_deref());
     json!({
         "matches": matches,
         "list": list.into_iter().map(|(c, pos, g, w)| json!({"champ_id": c, "pos": pos, "games": g, "wins": w})).collect::<Vec<_>>(),
@@ -554,8 +632,8 @@ fn meta_overview(state: State<'_, AppState>, patch: Option<String>) -> Value {
 
 /// Données détaillées (runes, objets, compétences, stats…) des joueurs méta, pour un champion et/ou un rôle.
 #[tauri::command]
-fn meta_rows(state: State<'_, AppState>, champ_id: Option<i64>, pos: Option<String>, patch: Option<String>) -> Vec<Value> {
-    db::meta_part_rows(&state.db.lock().unwrap(), champ_id, pos.as_deref(), patch.as_deref())
+fn meta_rows(state: State<'_, AppState>, champ_id: Option<i64>, pos: Option<String>, patch: Option<String>, tiers: Option<String>) -> Vec<Value> {
+    db::meta_part_rows(&state.db.lock().unwrap(), champ_id, pos.as_deref(), patch.as_deref(), tiers.as_deref())
         .into_iter()
         .filter_map(|d| serde_json::from_str(&d).ok())
         .collect()

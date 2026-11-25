@@ -31,6 +31,14 @@ pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS meta_bans(match_id TEXT NOT NULL, patch TEXT NOT NULL, champ_id INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS meta_bans_idx ON meta_bans(patch);",
     )?;
+    // rang des parties méta (pour filtrer la tier list par rang) : ajout aux bases existantes
+    let _ = c.execute("ALTER TABLE meta_parts ADD COLUMN tier TEXT", []);
+    let _ = c.execute("ALTER TABLE meta_bans ADD COLUMN tier TEXT", []);
+    let _ = c.execute_batch(
+        "UPDATE meta_parts SET tier=(SELECT tier FROM meta_matches mm WHERE mm.match_id=meta_parts.match_id) WHERE tier IS NULL;
+         UPDATE meta_bans SET tier=(SELECT tier FROM meta_matches mm WHERE mm.match_id=meta_bans.match_id) WHERE tier IS NULL;
+         CREATE INDEX IF NOT EXISTS meta_parts_t ON meta_parts(patch, tier, pos);",
+    );
     Ok(c)
 }
 
@@ -178,9 +186,10 @@ pub fn meta_all(c: &Connection, patch: Option<&str>) -> Vec<(MatchLite, Option<S
         .collect()
 }
 
-pub fn meta_patches(c: &Connection) -> Vec<(String, i64)> {
-    let Ok(mut st) = c.prepare("SELECT patch, COUNT(*) FROM meta_matches GROUP BY patch") else { return vec![] };
-    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+/// (patch, rang, parties)
+pub fn meta_patches(c: &Connection) -> Vec<(String, String, i64)> {
+    let Ok(mut st) = c.prepare("SELECT patch, tier, COUNT(*) FROM meta_matches GROUP BY patch, tier") else { return vec![] };
+    st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }
@@ -224,17 +233,17 @@ pub struct PartRow {
     pub data: String,
 }
 
-pub fn meta_parts_save(c: &Connection, match_id: &str, patch: &str, rows: &[PartRow], bans: &[i64]) {
+pub fn meta_parts_save(c: &Connection, match_id: &str, patch: &str, tier: &str, rows: &[PartRow], bans: &[i64]) {
     let _ = c.execute("DELETE FROM meta_parts WHERE match_id=?1", [match_id]);
     let _ = c.execute("DELETE FROM meta_bans WHERE match_id=?1", [match_id]);
     for r in rows {
         let _ = c.execute(
-            "INSERT INTO meta_parts(match_id, patch, champ_id, pos, win, data) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![match_id, patch, r.champ, r.pos, r.win as i64, r.data],
+            "INSERT INTO meta_parts(match_id, patch, champ_id, pos, win, data, tier) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![match_id, patch, r.champ, r.pos, r.win as i64, r.data, tier],
         );
     }
     for b in bans.iter().filter(|b| **b > 0) {
-        let _ = c.execute("INSERT INTO meta_bans(match_id, patch, champ_id) VALUES(?1, ?2, ?3)", params![match_id, patch, b]);
+        let _ = c.execute("INSERT INTO meta_bans(match_id, patch, champ_id, tier) VALUES(?1, ?2, ?3, ?4)", params![match_id, patch, b, tier]);
     }
 }
 
@@ -244,32 +253,35 @@ pub fn meta_parts_missing(c: &Connection) -> bool {
     parts < metas
 }
 
+/// Filtre de rang : « ,MASTER,GRANDMASTER, » (None = tous les rangs).
+const TIER_SQL: &str = "(?2 IS NULL OR instr(?2, ',' || tier || ',') > 0)";
+
 /// (matches, [(champ, pos, games, wins)], [(champ, bans)])
-pub fn meta_overview(c: &Connection, patch: Option<&str>) -> (i64, Vec<(i64, String, i64, i64)>, Vec<(i64, i64)>) {
+pub fn meta_overview(c: &Connection, patch: Option<&str>, tiers: Option<&str>) -> (i64, Vec<(i64, String, i64, i64)>, Vec<(i64, i64)>) {
     let matches: i64 = c
-        .query_row("SELECT COUNT(*) FROM meta_matches WHERE (?1 IS NULL OR patch = ?1)", params![patch], |r| r.get(0))
+        .query_row(&format!("SELECT COUNT(*) FROM meta_matches WHERE (?1 IS NULL OR patch = ?1) AND {TIER_SQL}"), params![patch, tiers], |r| r.get(0))
         .unwrap_or(0);
     let mut list = vec![];
-    if let Ok(mut st) = c.prepare(
-        "SELECT champ_id, pos, COUNT(*), SUM(win) FROM meta_parts WHERE (?1 IS NULL OR patch = ?1) GROUP BY champ_id, pos",
-    ) {
-        if let Ok(rows) = st.query_map(params![patch], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) {
+    if let Ok(mut st) = c.prepare(&format!(
+        "SELECT champ_id, pos, COUNT(*), SUM(win) FROM meta_parts WHERE (?1 IS NULL OR patch = ?1) AND {TIER_SQL} GROUP BY champ_id, pos"
+    )) {
+        if let Ok(rows) = st.query_map(params![patch, tiers], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) {
             list = rows.filter_map(Result::ok).collect();
         }
     }
     let mut bans = vec![];
-    if let Ok(mut st) = c.prepare("SELECT champ_id, COUNT(*) FROM meta_bans WHERE (?1 IS NULL OR patch = ?1) GROUP BY champ_id") {
-        if let Ok(rows) = st.query_map(params![patch], |r| Ok((r.get(0)?, r.get(1)?))) {
+    if let Ok(mut st) = c.prepare(&format!("SELECT champ_id, COUNT(*) FROM meta_bans WHERE (?1 IS NULL OR patch = ?1) AND {TIER_SQL} GROUP BY champ_id")) {
+        if let Ok(rows) = st.query_map(params![patch, tiers], |r| Ok((r.get(0)?, r.get(1)?))) {
             bans = rows.filter_map(Result::ok).collect();
         }
     }
     (matches, list, bans)
 }
 
-pub fn meta_part_rows(c: &Connection, champ: Option<i64>, pos: Option<&str>, patch: Option<&str>) -> Vec<String> {
-    let sql = "SELECT data FROM meta_parts WHERE (?1 IS NULL OR champ_id = ?1) AND (?2 IS NULL OR pos = ?2) AND (?3 IS NULL OR patch = ?3)";
+pub fn meta_part_rows(c: &Connection, champ: Option<i64>, pos: Option<&str>, patch: Option<&str>, tiers: Option<&str>) -> Vec<String> {
+    let sql = "SELECT data FROM meta_parts WHERE (?1 IS NULL OR champ_id = ?1) AND (?3 IS NULL OR pos = ?3) AND (?4 IS NULL OR patch = ?4) AND (?2 IS NULL OR instr(?2, ',' || tier || ',') > 0)";
     let Ok(mut st) = c.prepare(sql) else { return vec![] };
-    st.query_map(params![champ, pos, patch], |r| r.get::<_, String>(0))
+    st.query_map(params![champ, tiers, pos, patch], |r| r.get::<_, String>(0))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }
