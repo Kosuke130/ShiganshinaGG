@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShiganshinaGG</title>
+  <link rel="icon" href="logo.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="logo.svg" alt="" />
+      <div class="brand-txt"><span class="b1">Shiganshina</span><span class="b2">GG</span></div>
+    </div>
+    <nav id="nav">
+      <div class="nav-label">Joueur</div>
+      <button data-view="overview"><svg viewBox="0 0 24 24"><path d="M3 12l9-8 9 8M5 10v10h5v-6h4v6h5V10"/></svg><span>Aperçu</span></button>
+      <button data-view="history"><svg viewBox="0 0 24 24"><path d="M12 7v5l3 3M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg><span>Historique</span></button>
+      <button data-view="analysis"><svg viewBox="0 0 24 24"><path d="M21 21H4V3M8 17v-5M12 17V8M16 17v-8M20 17V6"/></svg><span>Analyse</span></button>
+      <button data-view="champions"><svg viewBox="0 0 24 24"><path d="M14.5 17.5L3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2"/></svg><span>Champions</span></button>
+      <button data-view="mastery"><svg viewBox="0 0 24 24"><path d="M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.2 13.9L7 23l5-3 5 3-1.2-9.1"/></svg><span>Maîtrises</span></button>
+      <button data-view="lp"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg><span>Évolution LP</span></button>
+      <button data-view="compare"><svg viewBox="0 0 24 24"><path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7"/></svg><span>Comparer</span></button>
+      <button data-view="live"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.5M7.8 16.2a6 6 0 0 1 0-8.5M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/></svg><span>Partie en cours</span><i class="live-dot" id="liveDot"></i></button>
+      <div class="nav-label">Méta</div>
+      <button data-view="builds"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg><span>Builds & tier list</span></button>
+      <div class="nav-label">Compte</div>
+      <button data-view="skins"><svg viewBox="0 0 24 24"><path d="M12 2l3 6 6 .9-4.5 4.3 1 6.3L12 16.5 6.5 19.5l1-6.3L3 8.9 9 8z"/></svg><span>Collection skins</span></button>
+      <button data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Paramètres</span></button>
+    </nav>
+    <div class="favs" id="favs"></div>
+    <div class="client-status meta-status" id="metaStatus"><span class="spin" style="width:12px;height:12px;border-width:2px"></span><span class="txt">Builds : import…</span></div>
+    <div class="client-status" id="clientStatus"><span class="dot"></span><span class="txt">Client LoL…</span></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div class="navbtns">
+        <button class="btn icon ghost" id="navBack" title="Page précédente (Alt+←)" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button class="btn icon ghost" id="navFwd" title="Page suivante (Alt+→)" disabled><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
+      </div>
+      <form id="search" autocomplete="off">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="q" placeholder="Rechercher un invocateur — Nom#TAG" spellcheck="false" />
+        <select id="region"></select>
+        <button class="btn primary" type="submit">Rechercher</button>
+        <div class="suggest" id="suggest"></div>
+      </form>
+      <button class="btn ghost" id="homeBtn" title="Revenir à mon compte"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Mon compte</button>
+    </header>
+    <section id="view" class="view"></section>
+  </main>
+
+  <div id="toast"></div>
+  <div id="tip"></div>
+  <script src="app.js"></script>
+</body>
+</html>

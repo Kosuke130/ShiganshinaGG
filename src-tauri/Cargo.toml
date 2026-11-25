@@ -1,0 +1,28 @@
+[package]
+name = "shiganshinagg"
+version = "1.0.0"
+description = "ShiganshinaGG : suivi League of Legends (stats, historique, LP, maîtrises, partie en cours, skins)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time", "sync"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

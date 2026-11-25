@@ -1,0 +1,6 @@
+src-tauri/target/
+src-tauri/gen/
+*.exe
+install-log.txt
+github-log.txt
+publier-github.bat
